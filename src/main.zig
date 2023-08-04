@@ -18,6 +18,11 @@ pub fn main() !void {
 }
 
 fn behaviorTest(allocator: Allocator, file_relative_path: []const u8) !void {
+    const start = try std.time.Instant.now();
+    defer {
+        const end = std.time.Instant.now() catch unreachable;
+        std.log.err("TIME: {} ns", .{end.since(start)});
+    }
     const file = try fs.readFile(allocator, file_relative_path);
     var lexer_result = try lexer.runTest(allocator, file);
     defer lexer_result.free(allocator);

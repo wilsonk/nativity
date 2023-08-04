@@ -66,6 +66,7 @@ const Function = struct {
 pub const Result = struct {
     top_level_declarations: ArrayList(TopLevelDeclaration),
     functions: ArrayList(Function),
+    instructions: struct {} = .{},
 
     pub fn free(result: *Result, allocator: Allocator) void {
         for (result.functions.items) |*function| {

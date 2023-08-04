@@ -3,6 +3,8 @@ const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 const log = std.log;
 
+const equal = std.mem.eql;
+
 const data_structures = @import("data_structures.zig");
 const ArrayList = data_structures.ArrayList;
 
@@ -58,6 +60,8 @@ const Identifier = struct {
 pub const TokenId = enum {
     identifier,
     special_character,
+    keyword,
+    integer,
 };
 
 pub const SpecialCharacter = enum(u8) {
@@ -68,9 +72,20 @@ pub const SpecialCharacter = enum(u8) {
     right_brace = '}',
 };
 
+pub const Keyword = enum {
+    @"return",
+};
+
+pub const Integer = struct {
+    number: u64,
+    negative: bool = false,
+};
+
 pub const Result = struct {
     identifiers: ArrayList(Identifier),
     special_characters: ArrayList(SpecialCharacter),
+    keywords: ArrayList(Keyword),
+    integers: ArrayList(Integer),
     ids: ArrayList(TokenId),
     file: []const u8,
     time: u64 = 0,
@@ -79,7 +94,6 @@ pub const Result = struct {
         result.identifiers.clearAndFree(allocator);
         result.special_characters.clearAndFree(allocator);
         result.ids.clearAndFree(allocator);
-        allocator.free(result.file);
     }
 };
 
@@ -91,6 +105,8 @@ fn lex(allocator: Allocator, text: []const u8) !Result {
     var result = Result{
         .identifiers = try ArrayList(Identifier).initCapacity(allocator, text.len),
         .special_characters = try ArrayList(SpecialCharacter).initCapacity(allocator, text.len),
+        .keywords = try ArrayList(Keyword).initCapacity(allocator, text.len),
+        .integers = try ArrayList(Integer).initCapacity(allocator, text.len),
         .ids = try ArrayList(TokenId).initCapacity(allocator, text.len),
         .file = text,
     };
@@ -100,7 +116,7 @@ fn lex(allocator: Allocator, text: []const u8) !Result {
         result.time = time_end.since(time_start);
     }
 
-    while (index < text.len) {
+    next_token: while (index < text.len) {
         const first_char = text[index];
         switch (first_char) {
             'a'...'z', 'A'...'Z', '_' => {
@@ -108,6 +124,16 @@ fn lex(allocator: Allocator, text: []const u8) !Result {
                 // SIMD this
                 while (!endOfIdentifier(text[index])) {
                     index += 1;
+                }
+
+                const identifier = text[start..index];
+
+                inline for (comptime std.enums.values(Keyword)) |keyword| {
+                    if (equal(u8, @tagName(keyword), identifier)) {
+                        result.keywords.appendAssumeCapacity(keyword);
+                        result.ids.appendAssumeCapacity(.keyword);
+                        continue :next_token;
+                    }
                 }
 
                 result.identifiers.appendAssumeCapacity(.{
@@ -132,8 +158,26 @@ fn lex(allocator: Allocator, text: []const u8) !Result {
                     @panic("TODO");
                 }
             },
+            '0'...'9' => {
+                const start = index;
+
+                while (text[index] >= '0' and text[index] <= '9') {
+                    index += 1;
+                }
+                const end = index;
+                const number_slice = text[start..end];
+                const number = try std.fmt.parseInt(u64, number_slice, 10);
+                result.integers.appendAssumeCapacity(.{
+                    .number = number,
+                    .negative = false,
+                });
+                result.ids.appendAssumeCapacity(.integer);
+
+                index += 1;
+            },
             else => {
                 index += 1;
+                unreachable;
             },
         }
     }
