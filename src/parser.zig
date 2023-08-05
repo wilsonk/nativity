@@ -104,7 +104,7 @@ const Parser = struct {
     fn parseExpression(parser: *Parser) !void {
         const next_token = parser.peek() orelse unreachable; // TODO: proper error message
         switch (next_token) {
-            .integer => parser.parseInteger(),
+            .integer => unreachable,
             else => @panic(@tagName(next_token)),
         }
 

@@ -31,13 +31,33 @@ const Result = struct {
         };
     }
 
+    fn destroy(image: *Result) void {
+        inline for (comptime std.meta.fieldNames(@TypeOf(image.sections))) |field_name| {
+            const section_bytes = @field(image.sections, field_name).content;
+            switch (@import("builtin").os.tag) {
+                .linux => std.os.munmap(section_bytes),
+                .windows => std.os.windows.VirtualFree(section_bytes.ptr, 0, std.os.windows.MEM_RELEASE),
+                else => @compileError("OS not supported"),
+            }
+        }
+    }
+
     inline fn mmap(size: usize, flags: packed struct {
         executable: bool,
     }) ![]align(page_size) u8 {
-        const protection_flags = std.os.PROT.READ | std.os.PROT.WRITE | if (flags.executable) std.os.PROT.EXEC else 0;
-        const mmap_flags = std.os.MAP.ANONYMOUS | std.os.MAP.PRIVATE;
+        return switch (@import("builtin").os.tag) {
+            .windows => blk: {
+                const windows = std.os.windows;
+                break :blk @as([*]align(0x1000) u8, @ptrCast(@alignCast(try windows.VirtualAlloc(null, size, windows.MEM_COMMIT | windows.MEM_RESERVE, windows.PAGE_EXECUTE_READWRITE))))[0..size];
+            },
+            .linux => blk: {
+                const protection_flags = std.os.PROT.READ | std.os.PROT.WRITE | if (flags.executable) std.os.PROT.EXEC else 0;
+                const mmap_flags = std.os.MAP.ANONYMOUS | std.os.MAP.PRIVATE;
 
-        return std.os.mmap(null, size, protection_flags, mmap_flags, -1, 0);
+                break :blk std.os.mmap(null, size, protection_flags, mmap_flags, -1, 0);
+            },
+            else => @compileError("OS not supported"),
+        };
     }
 
     fn appendCode(image: *Result, code: []const u8) void {
@@ -63,7 +83,10 @@ const Result = struct {
     pub fn free(result: *Result, allocator: Allocator) void {
         _ = allocator;
         inline for (comptime std.meta.fieldNames(@TypeOf(result.sections))) |field_name| {
-            std.os.munmap(@field(result.sections, field_name).content);
+            switch (@import("builtin").os.tag) {
+                .windows => unreachable,
+                else => std.os.munmap(@field(result.sections, field_name).content),
+            }
         }
     }
 };
