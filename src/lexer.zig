@@ -82,18 +82,24 @@ pub const Integer = struct {
 };
 
 pub const Result = struct {
-    identifiers: ArrayList(Identifier),
-    special_characters: ArrayList(SpecialCharacter),
-    keywords: ArrayList(Keyword),
-    integers: ArrayList(Integer),
-    ids: ArrayList(TokenId),
+    arrays: struct {
+        identifiers: ArrayList(Identifier),
+        special_characters: ArrayList(SpecialCharacter),
+        keywords: ArrayList(Keyword),
+        integers: ArrayList(Integer),
+        ids: ArrayList(TokenId),
+    },
     file: []const u8,
     time: u64 = 0,
 
     pub fn free(result: *Result, allocator: Allocator) void {
-        result.identifiers.clearAndFree(allocator);
-        result.special_characters.clearAndFree(allocator);
-        result.ids.clearAndFree(allocator);
+        inline for (@typeInfo(@TypeOf(result.arrays)).Struct.fields) |field| {
+            @field(result.arrays, field.name).clearAndFree(allocator);
+        }
+        // result.identifiers.clearAndFree(allocator);
+        // result.special_characters.clearAndFree(allocator);
+        // result.integers.clearAndFree(allocator);
+        // result.ids.clearAndFree(allocator);
     }
 };
 
@@ -103,11 +109,13 @@ fn lex(allocator: Allocator, text: []const u8) !Result {
     var index: usize = 0;
 
     var result = Result{
-        .identifiers = try ArrayList(Identifier).initCapacity(allocator, text.len),
-        .special_characters = try ArrayList(SpecialCharacter).initCapacity(allocator, text.len),
-        .keywords = try ArrayList(Keyword).initCapacity(allocator, text.len),
-        .integers = try ArrayList(Integer).initCapacity(allocator, text.len),
-        .ids = try ArrayList(TokenId).initCapacity(allocator, text.len),
+        .arrays = .{
+            .identifiers = try ArrayList(Identifier).initCapacity(allocator, text.len),
+            .special_characters = try ArrayList(SpecialCharacter).initCapacity(allocator, text.len),
+            .keywords = try ArrayList(Keyword).initCapacity(allocator, text.len),
+            .integers = try ArrayList(Integer).initCapacity(allocator, text.len),
+            .ids = try ArrayList(TokenId).initCapacity(allocator, text.len),
+        },
         .file = text,
     };
 
@@ -130,29 +138,29 @@ fn lex(allocator: Allocator, text: []const u8) !Result {
 
                 inline for (comptime std.enums.values(Keyword)) |keyword| {
                     if (equal(u8, @tagName(keyword), identifier)) {
-                        result.keywords.appendAssumeCapacity(keyword);
-                        result.ids.appendAssumeCapacity(.keyword);
+                        result.arrays.keywords.appendAssumeCapacity(keyword);
+                        result.arrays.ids.appendAssumeCapacity(.keyword);
                         continue :next_token;
                     }
                 }
 
-                result.identifiers.appendAssumeCapacity(.{
+                result.arrays.identifiers.appendAssumeCapacity(.{
                     .start = @intCast(start),
                     .end = @intCast(index),
                 });
 
-                result.ids.appendAssumeCapacity(.identifier);
+                result.arrays.ids.appendAssumeCapacity(.identifier);
             },
             '(', ')', '{', '}' => |special_character| {
-                result.special_characters.appendAssumeCapacity(@enumFromInt(special_character));
-                result.ids.appendAssumeCapacity(.special_character);
+                result.arrays.special_characters.appendAssumeCapacity(@enumFromInt(special_character));
+                result.arrays.ids.appendAssumeCapacity(.special_character);
                 index += 1;
             },
             ' ', '\n' => index += 1,
             '-' => {
                 if (text[index + 1] == '>') {
-                    result.special_characters.appendAssumeCapacity(.arrow);
-                    result.ids.appendAssumeCapacity(.special_character);
+                    result.arrays.special_characters.appendAssumeCapacity(.arrow);
+                    result.arrays.ids.appendAssumeCapacity(.special_character);
                     index += 2;
                 } else {
                     @panic("TODO");
@@ -167,11 +175,11 @@ fn lex(allocator: Allocator, text: []const u8) !Result {
                 const end = index;
                 const number_slice = text[start..end];
                 const number = try std.fmt.parseInt(u64, number_slice, 10);
-                result.integers.appendAssumeCapacity(.{
+                result.arrays.integers.appendAssumeCapacity(.{
                     .number = number,
                     .negative = false,
                 });
-                result.ids.appendAssumeCapacity(.integer);
+                result.arrays.ids.appendAssumeCapacity(.integer);
 
                 index += 1;
             },
@@ -187,6 +195,7 @@ fn lex(allocator: Allocator, text: []const u8) !Result {
 
 pub fn runTest(allocator: Allocator, file: []const u8) !Result {
     const result = try lex(allocator, file);
+    errdefer result.free(allocator);
 
     return result;
 }
@@ -195,6 +204,7 @@ test "lexer" {
     const allocator = std.testing.allocator;
     const file_path = fs.first;
     const file = try fs.readFile(allocator, file_path);
+    defer allocator.free(file);
     var result = try runTest(allocator, file);
     defer result.free(allocator);
 }

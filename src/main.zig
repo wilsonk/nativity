@@ -24,12 +24,10 @@ fn behaviorTest(allocator: Allocator, file_relative_path: []const u8) !void {
         std.log.err("TIME: {} ns", .{end.since(start)});
     }
     const file = try fs.readFile(allocator, file_relative_path);
+    defer allocator.free(file);
     var lexer_result = try lexer.runTest(allocator, file);
     defer lexer_result.free(allocator);
-    var parser_result = parser.runTest(allocator, &lexer_result) catch |err| {
-        std.log.err("Lexer took {} ns", .{lexer_result.time});
-        return err;
-    };
+    var parser_result = try parser.runTest(allocator, &lexer_result);
     defer parser_result.free(allocator);
     var ir_result = try ir.runTest(allocator, &parser_result);
     defer ir_result.free(allocator);

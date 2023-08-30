@@ -17,12 +17,13 @@ pub const Result = struct {
     pub fn free(result: *Result, allocator: Allocator) void {
         result.functions.clearAndFree(allocator);
         result.strings.clearAndFree(allocator);
+        std.log.err("AAAAAAAAAAAAAA", .{});
     }
 };
 
 const PeekResult = union(lexer.TokenId) {
-    special_character: lexer.SpecialCharacter,
     identifier: []const u8,
+    special_character: lexer.SpecialCharacter,
     keyword: Keyword,
     integer: Integer,
 };
@@ -55,8 +56,14 @@ const Parser = struct {
     allocator: Allocator,
     functions: ArrayList(Function),
 
+    fn free(parser: *Parser) void {
+        parser.functions.clearAndFree(parser.allocator);
+        parser.strings.clearAndFree(parser.allocator);
+    }
+
     fn parse(parser: *Parser) !Result {
-        while (parser.id_index < parser.lexer_result.ids.items.len) {
+        errdefer parser.free();
+        while (parser.id_index < parser.lexer_result.arrays.ids.items.len) {
             try parser.parseTopLevelDeclaration();
         }
 
@@ -67,7 +74,7 @@ const Parser = struct {
     }
 
     fn parseFunction(parser: *Parser, name: u32) !Function {
-        assert(parser.lexer_result.special_characters.items[parser.special_character_index] == .left_parenthesis);
+        assert(parser.lexer_result.arrays.special_characters.items[parser.special_character_index] == .left_parenthesis);
         parser.consume(.special_character);
 
         while (true) {
@@ -89,7 +96,7 @@ const Parser = struct {
                 .special_character => |special_character| if (special_character == .right_brace) break else unreachable,
                 .identifier => |identifier| try parser.parseExpressionIdentifier(identifier),
                 .keyword => |keyword| try parser.parseExpressionKeyword(keyword),
-                .integer => |_| unreachable,
+                .integer => |integer| try parser.parseExpressionInteger(integer),
             }
         }
 
@@ -104,7 +111,7 @@ const Parser = struct {
     fn parseExpression(parser: *Parser) !void {
         const next_token = parser.peek() orelse unreachable; // TODO: proper error message
         switch (next_token) {
-            .integer => unreachable,
+            .integer => |integer| try parser.parseExpressionInteger(integer),
             else => @panic(@tagName(next_token)),
         }
 
@@ -131,8 +138,15 @@ const Parser = struct {
         return error.not_implemented;
     }
 
+    fn parseExpressionInteger(parser: *Parser, integer: Integer) !void {
+        _ = integer;
+        parser.consume(.integer);
+
+        return error.not_implemented;
+    }
+
     inline fn consume(parser: *Parser, comptime token_id: lexer.TokenId) void {
-        assert(parser.lexer_result.ids.items[parser.id_index] == token_id);
+        assert(parser.lexer_result.arrays.ids.items[parser.id_index] == token_id);
         parser.id_index += 1;
 
         switch (token_id) {
@@ -172,38 +186,38 @@ const Parser = struct {
     }
 
     inline fn peek(parser: *const Parser) ?PeekResult {
-        if (parser.id_index >= parser.lexer_result.ids.items.len) {
+        if (parser.id_index >= parser.lexer_result.arrays.ids.items.len) {
             return null;
         }
 
-        return switch (parser.lexer_result.ids.items[parser.id_index]) {
+        return switch (parser.lexer_result.arrays.ids.items[parser.id_index]) {
             .special_character => .{
-                .special_character = parser.lexer_result.special_characters.items[parser.special_character_index],
+                .special_character = parser.lexer_result.arrays.special_characters.items[parser.special_character_index],
             },
             .identifier => .{
                 .identifier = blk: {
-                    const identifier_range = parser.lexer_result.identifiers.items[parser.identifier_index];
+                    const identifier_range = parser.lexer_result.arrays.identifiers.items[parser.identifier_index];
                     break :blk parser.lexer_result.file[identifier_range.start..identifier_range.end];
                 },
             },
             .keyword => .{
-                .keyword = parser.lexer_result.keywords.items[parser.keyword_index],
+                .keyword = parser.lexer_result.arrays.keywords.items[parser.keyword_index],
             },
             .integer => .{
-                .integer = parser.lexer_result.integers.items[parser.integer_index],
+                .integer = parser.lexer_result.arrays.integers.items[parser.integer_index],
             },
         };
     }
 
     fn expectSpecialCharacter(parser: *Parser, expected: lexer.SpecialCharacter) !void {
-        const token_id = parser.lexer_result.ids.items[parser.id_index];
+        const token_id = parser.lexer_result.arrays.ids.items[parser.id_index];
         if (token_id != .special_character) {
             return error.expected_special_character;
         }
 
         defer parser.id_index += 1;
 
-        const special_character = parser.lexer_result.special_characters.items[parser.special_character_index];
+        const special_character = parser.lexer_result.arrays.special_characters.items[parser.special_character_index];
         if (special_character != expected) {
             return error.expected_different_special_character;
         }
@@ -214,14 +228,14 @@ const Parser = struct {
     fn acceptSpecialCharacter() void {}
 
     fn expectIdentifier(parser: *Parser) !u32 {
-        const token_id = parser.lexer_result.ids.items[parser.id_index];
+        const token_id = parser.lexer_result.arrays.ids.items[parser.id_index];
         if (token_id != .identifier) {
             return Error.expected_identifier;
         }
 
         parser.id_index += 1;
 
-        const identifier_range = parser.lexer_result.identifiers.items[parser.identifier_index];
+        const identifier_range = parser.lexer_result.arrays.identifiers.items[parser.identifier_index];
         parser.identifier_index += 1;
         const identifier = parser.lexer_result.file[identifier_range.start..identifier_range.end];
         const Hash = std.hash.Wyhash;
@@ -250,8 +264,7 @@ pub fn runTest(allocator: Allocator, lexer_result: *const lexer.Result) !Result 
         .lexer_result = lexer_result,
     };
 
-    return parser.parse() catch |err| {
-        std.log.err("error: {}", .{err});
-        return err;
-    };
+    const result = try parser.parse();
+
+    return result;
 }
