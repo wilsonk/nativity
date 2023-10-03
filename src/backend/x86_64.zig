@@ -85,7 +85,7 @@ pub const MIR = struct {
         id: Id,
         operand_count: u8 = 0,
 
-        pub fn getOperands(instruction: *MIR.Instruction) []Operand {
+        fn getOperands(instruction: *MIR.Instruction) []Operand {
             return instruction.operands[0..instruction.operand_count];
         }
 
@@ -282,6 +282,14 @@ pub const MIR = struct {
                             const ret_value = intermediate.values.get(ret_value_index);
                             switch (ret_value.*) {
                                 .integer => |integer| try mir.emitMovRegImm(function, integer, instruction_index, .ret, Size.fromBitCount(integer.type.bit_count)),
+                                // Do nothing since syscall puts registers in the return registers
+                                .syscall => {},
+                                .instruction => |ii| {
+                                    switch (intermediate.instructions.get(ii).*) {
+                                        .phi => {}, // TODO: phi
+                                        else => |t| @panic(@tagName(t)),
+                                    }
+                                },
                                 else => |t| @panic(@tagName(t)),
                             }
 
@@ -332,6 +340,17 @@ pub const MIR = struct {
                                         const stack_reference = intermediate.stack_references.get(stack_reference_index);
                                         try mir.emitMovRegStack(function, .{ .syscall_param = syscall_register }, stack_reference.*, instruction_index);
                                     },
+                                    .argument => |arg_i| {
+                                        const arg = intermediate.arguments.get(arg_i);
+                                        assert(arg.size <= 8);
+                                        assert(arg.alignment <= 8);
+                                        // TODO: check other parameters
+                                        if (argument_registers[arg.index] != syscall_register) {
+                                            // try mir.emitMovReg(function, .{ .syscall_param = syscall_register }, .{ .argument_param = sys
+                                            unreachable;
+                                        }
+                                        // const argument = intermediate.arguments.get(arg_i);
+                                    },
                                     else => |t| @panic(@tagName(t)),
                                 }
                             }
@@ -339,6 +358,7 @@ pub const MIR = struct {
                             try mir.addInstruction(function, .syscall, instruction_index, &.{});
                         },
                         .@"unreachable" => try mir.addInstruction(function, .ud2, instruction_index, &.{}),
+                        .phi => {}, // TODO: no phis
                         else => |t| @panic(@tagName(t)),
                     }
                 }
@@ -492,12 +512,12 @@ pub const MIR = struct {
         }
     }
 
-    pub fn encode(mir: *const MIR, intermediate: *const ir.Result) !emit.Result {
+    pub fn encode(mir: *const MIR, intermediate: *const ir.Result, target: std.Target) !emit.Result {
         var local_relocations = ArrayList(LocalRelocation){};
         var global_relocations = ArrayList(GlobalRelocation){};
         var block_index: usize = 0;
 
-        var image = try emit.Result.create();
+        var image = try emit.Result.create(target);
 
         for (mir.functions.items) |*function| {
             local_relocations.clearRetainingCapacity();
@@ -912,3 +932,4 @@ const GPRegister = enum(u4) {
 };
 
 const syscall_registers = [7]GPRegister{ .a, .di, .si, .d, .r10, .r8, .r9 };
+const argument_registers = [6]GPRegister{ .di, .si, .d, .c, .r8, .r9 };

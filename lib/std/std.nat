@@ -3,3 +3,5 @@ comptime {
 }
 
 const start = #import("start.nat");
+const os = #import("os.nat");
+const print = os.print;

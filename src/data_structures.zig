@@ -199,3 +199,113 @@ pub fn enumFromString(comptime E: type, string: []const u8) ?E {
         }
     } else null;
 }
+
+pub fn StringKeyMap(comptime Value: type) type {
+    return struct {
+        list: std.MultiArrayList(Data) = .{},
+        const Key = u32;
+        const Data = struct {
+            key: Key,
+            value: Value,
+        };
+
+        pub fn length(string_map: *@This()) usize {
+            return string_map.list.len;
+        }
+
+        fn hash(string: []const u8) Key {
+            const string_key: Key = @truncate(std.hash.Wyhash.hash(0, string));
+            return string_key;
+        }
+
+        pub fn getKey(string_map: *const @This(), string: []const u8) ?Key {
+            return if (string_map.getKeyPtr(string)) |key_ptr| key_ptr.* else null;
+        }
+
+        pub fn getKeyPtr(string_map: *const @This(), string_key: Key) ?*const Key {
+            for (string_map.list.items(.key)) |*key_ptr| {
+                if (key_ptr.* == string_key) {
+                    return key_ptr;
+                }
+            } else {
+                return null;
+            }
+        }
+
+        pub fn getValue(string_map: *const @This(), key: Key) ?Value {
+            if (string_map.getKeyPtr(key)) |key_ptr| {
+                const index = string_map.indexOfKey(key_ptr);
+                return string_map.list.items(.value)[index];
+            } else {
+                return null;
+            }
+        }
+
+        pub fn indexOfKey(string_map: *const @This(), key_ptr: *const Key) usize {
+            return @divExact(@intFromPtr(key_ptr) - @intFromPtr(string_map.list.items(.key).ptr), @sizeOf(Key));
+        }
+
+        const GOP = struct {
+            key: Key,
+            found_existing: bool,
+        };
+
+        pub fn getOrPut(string_map: *@This(), allocator: Allocator, string: []const u8, value: Value) !GOP {
+            const string_key: Key = @truncate(std.hash.Wyhash.hash(0, string));
+            for (string_map.list.items(.key)) |key| {
+                if (key == string_key) return .{
+                    .key = string_key,
+                    .found_existing = true,
+                };
+            } else {
+                try string_map.list.append(allocator, .{
+                    .key = string_key,
+                    .value = value,
+                });
+
+                return .{
+                    .key = string_key,
+                    .found_existing = false,
+                };
+            }
+        }
+    };
+}
+
+const page_size = std.mem.page_size;
+extern fn pthread_jit_write_protect_np(enabled: bool) void;
+
+pub fn mmap(size: usize, flags: packed struct {
+    executable: bool = false,
+}) ![]align(page_size) u8 {
+    return switch (@import("builtin").os.tag) {
+        .windows => blk: {
+            const windows = std.os.windows;
+            break :blk @as([*]align(page_size) u8, @ptrCast(@alignCast(try windows.VirtualAlloc(null, size, windows.MEM_COMMIT | windows.MEM_RESERVE, windows.PAGE_EXECUTE_READWRITE))))[0..size];
+        },
+        .linux, .macos => |os_tag| blk: {
+            const jit = switch (os_tag) {
+                .macos => 0x800,
+                .linux => 0,
+                else => unreachable,
+            };
+            const execute_flag: switch (os_tag) {
+                .linux => u32,
+                .macos => c_int,
+                else => unreachable,
+            } = if (flags.executable) std.os.PROT.EXEC else 0;
+            const protection_flags: u32 = @intCast(std.os.PROT.READ | std.os.PROT.WRITE | execute_flag);
+            const mmap_flags = std.os.MAP.ANONYMOUS | std.os.MAP.PRIVATE | jit;
+
+            const result = try std.os.mmap(null, size, protection_flags, mmap_flags, -1, 0);
+            if (@import("builtin").cpu.arch == .aarch64 and @import("builtin").os.tag == .macos) {
+                if (flags.executable) {
+                    pthread_jit_write_protect_np(false);
+                }
+            }
+
+            break :blk result;
+        },
+        else => @compileError("OS not supported"),
+    };
+}

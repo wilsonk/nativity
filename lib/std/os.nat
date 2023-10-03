@@ -1,0 +1,48 @@
+const current = #import("builtin").os;
+
+const write = fn (file_descriptor: FileDescriptor, bytes_ptr: [@]const u8, bytes_len: usize) ssize {
+    switch (current) {
+        .linux => return #syscall(1, fd, bytes_ptr, bytes_len),
+        .macos => #compileError("Unknown error"),
+        .windows => {
+            var written_bytes: u32 = 0;
+            if (windows.WriteFile(file_descriptor, bytes_ptr, bytes_len, @written_bytes, false) != 0) {
+                return written_bytes;
+            } else {
+                unreachable;
+            }
+        },
+        else => #compileError("OS not supported"),
+    }
+}
+
+const FileDescriptor = switch (current) {
+    .linux => linux.fd_t,
+    .macos => macos.fd_t,
+    .windows => windows.HANDLE,
+    else => #compileError("OS not supported"),
+};
+
+const print = fn(bytes_ptr: [@]const u8, bytes_len: usize) void {
+    const file_descriptor = switch (current) {
+        .linux => 2,
+        .macos => #compileError("Macos todo"),
+        .windows => windows.GetStdHandle(windows.STD_OUTPUT_HANDLE),
+        else => #compileError("OS not supported"),
+    };
+}
+
+const exit = fn(exit_code: s32) noreturn {
+    switch (current) {
+        .linux => _ = #syscall(231, exit_code),
+        .macos => #compileError("TODO macos"),
+        .windows => windows.ExitProcess(exit_code),
+        else => #compileError("OS not supported"),
+    }
+    
+    unreachable;
+}
+
+const linux = #import("os/linux.nat");
+const macos = #import("os/macos.nat");
+const windows = #import("os/windows.nat");

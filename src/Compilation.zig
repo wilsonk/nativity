@@ -13,6 +13,7 @@ const AutoHashMap = data_structures.AutoHashMap;
 const BlockList = data_structures.BlockList;
 const HashMap = data_structures.HashMap;
 const SegmentedList = data_structures.SegmentedList;
+const StringKeyMap = data_structures.StringKeyMap;
 const StringHashMap = data_structures.StringHashMap;
 const StringArrayHashMap = data_structures.StringArrayHashMap;
 
@@ -72,7 +73,17 @@ pub const Type = union(enum) {
     noreturn,
     bool,
     integer: Type.Integer,
+    slice: Slice,
+    pointer: Pointer,
     @"struct": Struct.Index,
+
+    const Slice = struct {
+        element_type: Type.Index,
+    };
+    const Pointer = struct {
+        element_type: Type.Index,
+        many: bool,
+    };
     pub const List = BlockList(@This());
     pub const Index = List.Index;
     pub const Allocation = List.Allocation;
@@ -93,6 +104,7 @@ pub const Type = union(enum) {
     pub fn getSize(type_info: Type) u64 {
         return switch (type_info) {
             .integer => |integer| integer.getSize(),
+            .pointer => 8,
             else => |t| @panic(@tagName(t)),
         };
     }
@@ -100,6 +112,7 @@ pub const Type = union(enum) {
     pub fn getAlignment(type_info: Type) u64 {
         return switch (type_info) {
             .integer => |integer| @min(16, integer.getSize()),
+            .pointer => 8,
             else => |t| @panic(@tagName(t)),
         };
     }
@@ -131,19 +144,26 @@ pub const Declaration = struct {
     scope_type: ScopeType,
     mutability: Mutability,
     init_value: Value.Index,
-    name: []const u8,
+    name: u32,
+    is_argument: bool,
+    type: Type.Index,
 
     pub const List = BlockList(@This());
     pub const Index = List.Index;
     pub const Allocation = List.Allocation;
+
+    // pub fn getType(declaration: *Declaration) {
+    //
+    // }
 };
 
 pub const Function = struct {
+    scope: Scope.Index,
     body: Block.Index,
     prototype: Prototype.Index,
 
     pub const Prototype = struct {
-        arguments: ?[]const Field.Index,
+        arguments: ?[]const Declaration.Index,
         return_type: Type.Index,
 
         pub const List = BlockList(@This());
@@ -168,7 +188,8 @@ pub const Block = struct {
 };
 
 pub const Field = struct {
-    foo: u32 = 0,
+    name: u32,
+    type: Type.Index,
 
     pub const List = BlockList(@This());
     pub const Index = List.Index;
@@ -258,6 +279,8 @@ pub const Value = union(enum) {
     call: Call.Index,
     argument_list: ArgumentList,
     @"return": Return.Index,
+    argument: Declaration.Index,
+    string_literal: u32,
 
     pub const List = BlockList(@This());
     pub const Index = List.Index;
@@ -265,7 +288,7 @@ pub const Value = union(enum) {
 
     pub fn isComptime(value: Value) bool {
         return switch (value) {
-            .bool, .void, .undefined, .function => true,
+            .bool, .void, .undefined, .function, .type => true,
             else => false,
         };
     }
@@ -286,7 +309,7 @@ pub const Integer = struct {
 pub const Module = struct {
     main_package: *Package,
     import_table: StringArrayHashMap(*File) = .{},
-    string_table: AutoHashMap(u32, []const u8) = .{},
+    string_table: StringKeyMap([]const u8) = .{},
     declarations: BlockList(Declaration) = .{},
     structs: BlockList(Struct) = .{},
     scopes: BlockList(Scope) = .{},
@@ -301,12 +324,15 @@ pub const Module = struct {
     assignments: BlockList(Assignment) = .{},
     syscalls: BlockList(Syscall) = .{},
     calls: BlockList(Call) = .{},
-    argument_list: BlockList(ArgumentList) = .{},
+    argument_lists: BlockList(ArgumentList) = .{},
     returns: BlockList(Return) = .{},
+    string_literals: StringKeyMap([]const u8) = .{},
     entry_point: ?u32 = null,
 
     pub const Descriptor = struct {
         main_package_path: []const u8,
+        executable_path: []const u8,
+        target: std.Target,
     };
 
     const ImportFileResult = struct {
@@ -399,6 +425,7 @@ pub const Module = struct {
 
     pub fn importPackage(module: *Module, allocator: Allocator, package: *Package) !ImportPackageResult {
         const full_path = try std.fs.path.resolve(allocator, &.{ package.directory.path, package.source_path });
+        print("Import full path: {s}\n", .{full_path});
         const import_file = try module.getFile(allocator, full_path, package.source_path, package);
         try import_file.ptr.addPackageReference(allocator, package);
 
@@ -408,11 +435,12 @@ pub const Module = struct {
         };
     }
 
-    pub fn generateAbstractSyntaxTreeForFile(module: *Module, allocator: Allocator, file: *File) !void {
-        _ = module;
-        const source_file = file.package.directory.handle.openFile(file.relative_path, .{}) catch |err| {
-            std.debug.panic("Can't find file {s} in directory {s} for error {s}", .{ file.relative_path, file.package.directory.path, @errorName(err) });
-        };
+    pub fn generateAbstractSyntaxTreeForFile(module: *Module, allocator: Allocator, file_index: File.Index) !void {
+        const file = module.files.get(file_index);
+        const source_file = try file.package.directory.handle.openFile(file.relative_path, .{});
+        //catch |err| {
+        //std.debug.panic("Can't find file {s} in directory {s} for error {s}", .{ file.relative_path, file.package.directory.path, @errorName(err) });
+        //};
 
         const file_size = try source_file.getEndPos();
         var file_buffer = try allocator.alloc(u8, file_size);
@@ -425,8 +453,41 @@ pub const Module = struct {
         file.source_code = file_buffer[0..read_byte_count];
         file.status = .loaded_into_memory;
 
-        try file.lex(allocator);
-        try file.parse(allocator);
+        try file.lex(allocator, file_index);
+        print("Start of parsing file #{}\n", .{file_index.uniqueInteger()});
+        try file.parse(allocator, file_index);
+        print("End of parsing file #{}\n", .{file_index.uniqueInteger()});
+    }
+
+    fn getString(map: *StringKeyMap([]const u8), key: u32) ?[]const u8 {
+        return map.getValue(key);
+    }
+
+    fn addString(map: *StringKeyMap([]const u8), allocator: Allocator, string: []const u8) !u32 {
+        const lookup_result = try map.getOrPut(allocator, string, string);
+
+        {
+            const lookup_name = map.getValue(lookup_result.key) orelse unreachable;
+            assert(equal(u8, lookup_name, string));
+        }
+
+        return lookup_result.key;
+    }
+
+    pub fn getName(module: *Module, key: u32) ?[]const u8 {
+        return getString(&module.string_table, key);
+    }
+
+    pub fn addName(module: *Module, allocator: Allocator, name: []const u8) !u32 {
+        return addString(&module.string_table, allocator, name);
+    }
+
+    pub fn getStringLiteral(module: *Module, key: u32) ?[]const u8 {
+        return getString(&module.string_literals, key);
+    }
+
+    pub fn addStringLiteral(module: *Module, allocator: Allocator, string_literal: []const u8) !u32 {
+        return addString(&module.string_literals, allocator, string_literal);
     }
 };
 
@@ -508,14 +569,16 @@ pub fn compileModule(compilation: *Compilation, descriptor: Module.Descriptor) !
     _ = try module.importPackage(compilation.base_allocator, module.main_package.dependencies.get("std").?);
 
     for (module.import_table.values()) |import| {
-        try module.generateAbstractSyntaxTreeForFile(compilation.base_allocator, import);
+        try module.generateAbstractSyntaxTreeForFile(compilation.base_allocator, module.files.indexOf(import));
     }
 
     const main_declaration = try semantic_analyzer.initialize(compilation, module, packages[0], .{ .block = 0, .index = 0 });
 
     var ir = try intermediate_representation.initialize(compilation, module, packages[0], main_declaration);
 
-    try emit.get(.x86_64).initialize(compilation.base_allocator, &ir);
+    switch (descriptor.target.cpu.arch) {
+        inline else => |arch| try emit.get(arch).initialize(compilation.base_allocator, &ir, descriptor),
+    }
 }
 
 fn generateAST() !void {}
@@ -544,6 +607,7 @@ pub const File = struct {
     syntactic_analyzer_result: syntactic_analyzer.Result = undefined,
     package_references: ArrayList(*Package) = .{},
     file_references: ArrayList(*File) = .{},
+    type: Type.Index = Type.Index.invalid,
     relative_path: []const u8,
     package: *Package,
 
@@ -569,18 +633,18 @@ pub const File = struct {
         try file.file_references.append(allocator, affected);
     }
 
-    fn lex(file: *File, allocator: Allocator) !void {
+    fn lex(file: *File, allocator: Allocator, file_index: File.Index) !void {
         assert(file.status == .loaded_into_memory);
-        file.lexical_analyzer_result = try lexical_analyzer.analyze(allocator, file.source_code);
+        file.lexical_analyzer_result = try lexical_analyzer.analyze(allocator, file.source_code, file_index);
         // if (!@import("builtin").is_test) {
         // print("[LEXICAL ANALYSIS] {} ns\n", .{file.lexical_analyzer_result.time});
         // }
         file.status = .lexed;
     }
 
-    fn parse(file: *File, allocator: Allocator) !void {
+    fn parse(file: *File, allocator: Allocator, file_index: File.Index) !void {
         assert(file.status == .lexed);
-        file.syntactic_analyzer_result = try syntactic_analyzer.analyze(allocator, file.lexical_analyzer_result.tokens.items, file.source_code);
+        file.syntactic_analyzer_result = try syntactic_analyzer.analyze(allocator, file.lexical_analyzer_result.tokens.items, file.source_code, file_index);
         // if (!@import("builtin").is_test) {
         //     print("[SYNTACTIC ANALYSIS] {} ns\n", .{file.syntactic_analyzer_result.time});
         // }
